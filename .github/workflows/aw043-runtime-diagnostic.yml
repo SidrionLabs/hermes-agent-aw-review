@@ -1,0 +1,89 @@
+name: AW-043 unchanged-pin failure diagnosis
+
+on:
+  push:
+    branches: [review/aw043-runtime-diagnostic]
+    paths:
+      - .github/workflows/aw043-runtime-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Failure diagnosis (${{ matrix.label }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: unchanged-pin
+            commit: ae3598c7cdf3a2e4a6f60d0d869602813dded97a
+          - label: frozen-candidate
+            commit: e12235075953429b853c4957af868b6d6a02cd0a
+    env:
+      HERMES_TEST_FILE_RETRIES: '0'
+      HERMES_TEST_WORKERS: '2'
+      OPENAI_API_KEY: ''
+      OPENROUTER_API_KEY: ''
+      NOUS_API_KEY: ''
+    steps:
+      - name: Checkout selected immutable source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Provision pinned ripgrep required by upstream CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/aw043-ripgrep"
+          mkdir -p "$target"
+          archive="$target/ripgrep.tar.gz"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$archive" \
+            https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz
+          echo "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$target"
+          echo "$target/ripgrep-15.1.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: Prepare native pinned isolated test environment
+        uses: ./.github/actions/setup-pm
+        with:
+          extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona", "parallel-web", "messaging"]'
+          test-environment: 'true'
+          cache: 'false'
+          cache-python: 'false'
+          cache-node: 'false'
+      - name: Diagnose unchanged test files once
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ matrix.commit }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/aw043-diagnostic"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/head.txt"
+          test "$(cat "$evidence/head.txt")" = "$EXPECTED_COMMIT"
+          rg --version > "$evidence/ripgrep.txt"
+          "$HERMES_PYTHON" -c 'import sys,sqlite3; print(sys.version, sqlite3.sqlite_version)' > "$evidence/interpreter.txt"
+          sha256sum tests/tools/test_search_auto_multiline.py tests/tools/test_search_zero_match_and_multipath.py \
+            tests/hermes_cli/test_doctor_pm_store_probe.py tests/hermes_cli/test_shared_metrics_install_run.py \
+            tests/plugins/test_telegram_update_admission.py > "$evidence/test-file-hashes.txt"
+          set +e
+          /bin/bash scripts/run_tests.sh -j 2 --file-retries 0 --file-timeout 600 \
+            tests/tools/test_search_auto_multiline.py tests/tools/test_search_zero_match_and_multipath.py \
+            tests/hermes_cli/test_doctor_pm_store_probe.py tests/hermes_cli/test_shared_metrics_install_run.py \
+            tests/plugins/test_telegram_update_admission.py --tb=short 2>&1 | tee "$evidence/tests.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > "$evidence/exit-code.txt"
+          exit "$result"
+      - name: Preserve each diagnostic result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.label }}
+          path: ${{ runner.temp }}/aw043-diagnostic
+          if-no-files-found: warn
+          retention-days: 30
