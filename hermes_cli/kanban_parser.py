@@ -149,6 +149,10 @@ _BOARD_SPECS = [
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
+    _cmd("inspect-blocked", [
+        _arg("--request-file", required=True, metavar="PATH",
+             help="Versioned explicit blocked identity JSON (maximum 2MiB)"),
+    ], help="Observe exact blocked identity in a SQL-read-only snapshot; no initialization"),
     _cmd("reconcile-blocked", [
         _arg("--request-file", required=True, metavar="PATH",
              help="Versioned explicit independent blocked identity JSON (maximum 2MiB)"),
