@@ -1211,6 +1211,7 @@ def create_task(
     """
     from hermes_cli.kanban_db_graph import initial_task_state, inherit_creator_origin
     from hermes_cli.kanban_pr_acceptance import validate_contract
+    from hermes_cli.kanban_db_identity import active_task_id
 
     completion_contract = validate_contract(completion_contract)
     model_override, provider_override = _validate_model_override(model_override, provider_override)
@@ -1247,17 +1248,6 @@ def create_task(
     parents = tuple(p for p in parents if p)
     skills_list = _normalize_task_skills(skills)
 
-    # Idempotency check BEFORE the write txn (no lock held); a concurrent-create
-    # race may insert twice, the next lookup stabilises on the newest.
-    if idempotency_key:
-        row = conn.execute(
-            "SELECT id FROM tasks WHERE idempotency_key = ? "
-            "AND status != 'archived' "
-            "ORDER BY created_at DESC LIMIT 1", (idempotency_key,),
-        ).fetchone()
-        if row:
-            return row["id"]
-
     now = int(time.time())
 
     # Only persistent kinds inherit the board ``default_workdir``: a scratch
@@ -1274,6 +1264,12 @@ def create_task(
             # allow_nested: graph builders compose create_task under one outer
             # commit so the dispatcher never sees a half-built graph.
             with write_txn(conn, allow_nested=True):
+                # Reconcile under the same writer lock as insertion. The unique
+                # index also rejects stale inserts from older native clients.
+                if idempotency_key:
+                    existing_id = active_task_id(conn, idempotency_key)
+                    if existing_id:
+                        return existing_id
                 task_status, tenant = initial_task_state(conn, parents, initial_status, triage, tenant)
                 # Project worktree: fresh dir under the repo + deterministic
                 # branch, instead of the random ``wt/<id>`` worker fallback.
@@ -1349,8 +1345,9 @@ def create_task(
                 inherit_creator_origin(conn, task_id, creator_task_id, created_at=now)
                 _inherit_notify_subs(conn, task_id, parents, created_at=now)
             return task_id
-        except sqlite3.IntegrityError:
-            if attempt == 1:
+        except sqlite3.IntegrityError as exc:
+            if (exc.sqlite_errorcode != sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+                    or str(exc) != "UNIQUE constraint failed: tasks.id" or attempt == 1):
                 raise
     raise RuntimeError("unreachable")
 

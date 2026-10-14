@@ -951,6 +951,14 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON tasks(tenant)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key)")
+    # Fail migration on historical duplicates; never choose or delete a winner.
+    # Enforce even for older clients whose lookup preceded their write txn.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_idempotency "
+        "ON tasks(idempotency_key) "
+        "WHERE idempotency_key IS NOT NULL AND idempotency_key != '' "
+        "AND status != 'archived'"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)")
 
     # task_events.run_id back-fills as NULL for historical events (they predate
