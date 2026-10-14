@@ -180,3 +180,27 @@ def reconcile_blocked_identity(conn, request):
     # write_txn's post-commit integrity check can still raise: no result then.
     result["commit_observed_at_ns"] = time.time_ns()
     return result
+
+
+def observe_blocked_identity(conn, request):
+    """One SQL read snapshot; no creation, initialization or eligibility lease."""
+    identity = validate_request(request)
+    if conn.in_transaction:
+        raise RuntimeError("observation must own its read transaction")
+    conn.execute("BEGIN")
+    try:
+        rows = conn.execute("SELECT * FROM tasks WHERE idempotency_key=? LIMIT 2",
+                            (identity["idempotency_key"],)).fetchall()
+        if len(rows) > 1:
+            raise ValueError("ambiguous historical identity")
+        result = {"version": 1, "outcome": "absent"}
+        if rows:
+            task, events = _inspect_identity(conn, rows[0], identity)
+            result.update(outcome="observed", task=task, initial_event_ids=events)
+        encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
+        result["identity_sha256"] = hashlib.sha256(encoded).hexdigest()
+        result["transaction_observed_at_ns"] = time.time_ns()
+    finally:
+        conn.execute("ROLLBACK")
+    return result

@@ -49,3 +49,27 @@ an independent durable caller ledger must prevent replay of consumed identities.
 This interface neither authorizes a task nor releases a worker. Installed runtime
 adoption, schema review, receipt reconciliation and caller acceptance remain
 separate. It adds no model tool, dispatcher, gateway or policy override.
+
+## Current SQL-read-only observation
+
+`hermes kanban inspect-blocked --request-file PATH` uses the same exact request
+schema and board/profile routing, but skips initialization, migration, repair and
+readiness recomputation. The selected database must already exist as a canonical
+regular file. A tracked `mode=ro` connection, `query_only` and a deny-by-default
+SQL authorizer permit only fixed reads and a read transaction. No live
+`immutable=1` opening or raw database-byte probing is used.
+
+One read transaction covers the row and every related-history predicate. Success
+JSON has `outcome: "observed"` with the exact pristine blocked task and initial
+event IDs, or `outcome: "absent"` without a task. It includes `identity_sha256`,
+`transaction_observed_at_ns` and selected database path/device/inode. These are
+dated observations, never a writer commit certificate or authorization. Missing,
+malformed, unsupported, mismatched, ambiguous or consumed identities refuse.
+
+SQLite WAL access may use shared-memory and lock bookkeeping even for readonly
+connections. SQL-data/schema read-only is not a promise of byte-immutable storage,
+a standalone snapshot-acquisition certificate or universal writer exclusion.
+Other writers can change state after the observed snapshot; only the separate
+atomic reconcile operation can decide and create under its writer lock. Caller
+authorization, durable attempts, current-state checks and receipt publication
+remain required. Do not automatically repeat a mutation after lost output.

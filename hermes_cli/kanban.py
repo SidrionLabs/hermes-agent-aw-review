@@ -23,7 +23,9 @@ from hermes_cli import kanban_db_workspace as kbw
 from hermes_cli import kanban_db_notify as kbn
 from hermes_cli import kanban_swarm as ks
 from hermes_cli import kanban_workflow
-from hermes_cli.kanban_blocked_identity import command as _cmd_reconcile_blocked
+from hermes_cli.kanban_blocked_identity import (
+    command as _cmd_reconcile_blocked, observe_command as _cmd_inspect_blocked,
+)
 from hermes_cli.kanban_output import (
     _ATTACHMENT_FIELDS, _RUNS_RUN_FIELDS, _SHOW_RUN_FIELDS, _bulk_apply, _err,
     _fmt_counts, _fmt_task_line, _fmt_ts, _json_out, _obj_dict, _print_json,
@@ -180,8 +182,8 @@ def kanban_command(args: argparse.Namespace) -> int:
     with board_scope:
         # `repair` dispatches BEFORE auto-init: on a corrupt DB init_db() itself raises
         # KanbanDbCorruptError, which would turn every repair into "could not initialize database".
-        if action == "repair":
-            return _cmd_repair(args)
+        if action in _PRE_INIT_HANDLERS:
+            return _PRE_INIT_HANDLERS[action](args)
         # init_db is idempotent (one sqlite_master SELECT when tables exist) and prevents
         # "no such table: tasks" on first use from a fresh HERMES_HOME.
         try:
@@ -1317,6 +1319,8 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
     return _run_triage_sweep(args, "decompose", decomp, decomp.decompose_task, "decomposed",
                              ("task_id", "ok", "reason", "fanout", "child_ids", "new_title"), _decompose_ok_line)
 
+
+_PRE_INIT_HANDLERS = {"repair": _cmd_repair, "inspect-blocked": _cmd_inspect_blocked}
 
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
