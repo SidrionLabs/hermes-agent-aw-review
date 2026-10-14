@@ -416,6 +416,11 @@ async def _check_error_cancel_before_entry(monkeypatch, adapter, app, delivered)
         assert "111:10" in adapter._inflight_update_ids
         await app.process_update(update(app.bot))
         await app.stop()
+        # Completion callbacks are scheduled even when the task is already done.
+        settled = asyncio.Event()
+        for task, _ in scheduled:
+            task.add_done_callback(lambda _done: settled.set())
+        await asyncio.wait_for(settled.wait(), timeout=2)
     assert len(scheduled) == 1 and not effects
     assert not adapter._inflight_update_ids and not adapter._seen_update_ids
     # The cancelled PTB task never awaited the callback coroutine: it must be closed too.
