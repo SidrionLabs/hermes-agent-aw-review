@@ -1,0 +1,74 @@
+name: AW-043 exact blocked identity review
+
+on:
+  push:
+    branches: [review/aw043-exact-identity-ci]
+    paths:
+      - .github/workflows/aw043-exact-identity.yml
+      - scripts/ci/aw043_linux_exact_identity.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aw043-exact-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  exact:
+    if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      HERMES_TEST_FILE_RETRIES: '0'
+      HERMES_TEST_WORKERS: '2'
+      HERMES_TEST_SLICE: ''
+      OPENAI_API_KEY: ''
+      OPENROUTER_API_KEY: ''
+      NOUS_API_KEY: ''
+    steps:
+      - name: Initialize evidence before setup
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          printf '%s\n' '{"phase":"setup-started","tests":"unrun"}' > "$RUNNER_TEMP/aw043-runtime-evidence/setup-start.json"
+      - name: Checkout review infrastructure
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout frozen exact-identity candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: 77271a457975ac7a061b922773e0c33cdcb33638
+          path: candidate
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Admit exact ancestry scope and source hashes
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_exact_identity.py" "$GITHUB_WORKSPACE/candidate" --admit-only
+      - name: Provision checksum-pinned ripgrep
+        uses: ./.github/actions/aw043-review-ripgrep
+      - name: Prepare native pinned isolated environment
+        uses: ./candidate/.github/actions/setup-pm
+        with:
+          extras: '["messaging"]'
+          test-environment: 'true'
+          cache: 'false'
+          cache-python: 'false'
+          cache-node: 'false'
+      - name: Verify exact behavior and existing callers
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_exact_identity.py" "$GITHUB_WORKSPACE/candidate"
+      - name: Record job outcome
+        if: always()
+        env:
+          REVIEW_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"aw043-runtime-evidence"/"job-status.json"; p.write_text(json.dumps({"status":os.environ["REVIEW_JOB_STATUS"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"]}))'
+      - name: Preserve first-attempt evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-exact-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aw043-runtime-evidence
+          if-no-files-found: error
+          retention-days: 30
