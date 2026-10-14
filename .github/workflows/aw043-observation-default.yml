@@ -1,0 +1,136 @@
+name: AW-043 current observation default Linux verification
+
+on:
+  push:
+    branches: [review/aw043-observation-default-ci]
+    paths:
+      - .github/workflows/aw043-observation-default.yml
+      - scripts/ci/aw043_linux_observation_default.py
+      - .github/actions/aw043-review-ripgrep/action.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aw043-observation-default-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup-check:
+    if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
+    name: Verify frozen exact composition and ripgrep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Initialize early setup evidence
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          printf '%s\n' '{"phase":"setup-started","tests":"unrun"}' > "$RUNNER_TEMP/aw043-runtime-evidence/setup-start.json"
+      - name: Checkout review infrastructure
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout exact reviewed candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: a2444e56f3e0a5960a7180a996672583511fc3fa
+          path: candidate
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Verify reviewed source ancestry scope and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_observation_default.py" "$GITHUB_WORKSPACE/candidate" --admit-only 2>&1 | tee "$RUNNER_TEMP/aw043-runtime-evidence/source-admission.log"
+      - name: Verify shared ripgrep provisioning
+        uses: ./.github/actions/aw043-review-ripgrep
+      - name: Record final job status
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          REVIEW_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"aw043-runtime-evidence"/"job-status.json"; p.write_text(json.dumps({"status":os.environ["REVIEW_JOB_STATUS"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"]}))'
+      - name: Preserve setup evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-observation-default-setup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aw043-runtime-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  runtime:
+    needs: setup-check
+    if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
+    name: Native default runtime (${{ matrix.slice }}/8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4, 5, 6, 7, 8]
+    defaults:
+      run:
+        shell: bash
+        working-directory: candidate
+    env:
+      HERMES_TEST_FILE_RETRIES: '0'
+      HERMES_TEST_SLICE: ${{ matrix.slice }}/8
+      HERMES_TEST_WORKERS: '2'
+      OPENAI_API_KEY: ''
+      OPENROUTER_API_KEY: ''
+      NOUS_API_KEY: ''
+    steps:
+      - name: Initialize early setup evidence
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          printf '%s\n' '{"phase":"setup-started","tests":"unrun"}' > "$RUNNER_TEMP/aw043-runtime-evidence/setup-start.json"
+      - name: Checkout review infrastructure
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout exact reviewed candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: a2444e56f3e0a5960a7180a996672583511fc3fa
+          path: candidate
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Provision shared upstream pinned ripgrep
+        uses: ./.github/actions/aw043-review-ripgrep
+      - name: Admit source before native environment preparation
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_observation_default.py" "$GITHUB_WORKSPACE/candidate" --admit-only 2>&1 | tee "$RUNNER_TEMP/aw043-runtime-evidence/source-admission.log"
+      - name: Prepare native pinned isolated test environment
+        uses: ./candidate/.github/actions/setup-pm
+        with:
+          extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona", "parallel-web", "messaging"]'
+          test-environment: 'true'
+          cache: 'false'
+          cache-python: 'false'
+          cache-node: 'false'
+      - name: Verify one native default runtime slice
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_observation_default.py" "$GITHUB_WORKSPACE/candidate"
+      - name: Record final job status
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          REVIEW_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"aw043-runtime-evidence"/"job-status.json"; p.write_text(json.dumps({"status":os.environ["REVIEW_JOB_STATUS"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"]}))'
+      - name: Preserve diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-observation-default-runtime-${{ github.run_id }}-${{ github.run_attempt }}-slice-${{ matrix.slice }}
+          path: ${{ runner.temp }}/aw043-runtime-evidence
+          if-no-files-found: error
+          retention-days: 30
