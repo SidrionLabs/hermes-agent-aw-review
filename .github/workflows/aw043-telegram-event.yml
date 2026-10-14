@@ -1,0 +1,76 @@
+name: AW-043 Telegram completion fixture verification
+
+on:
+  push:
+    branches: [review/aw043-telegram-event-ci]
+    paths:
+      - .github/workflows/aw043-telegram-event.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: proposal
+    env:
+      HERMES_TEST_FILE_RETRIES: '0'
+      HERMES_TEST_WORKERS: '2'
+      OPENAI_API_KEY: ''
+      OPENROUTER_API_KEY: ''
+      NOUS_API_KEY: ''
+    steps:
+      - name: Checkout review infrastructure
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout isolated two-test proposal
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: c572afa804c8109473feaed8bd039b06be131159
+          path: proposal
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Prepare native pinned isolated test environment
+        uses: ./proposal/.github/actions/setup-pm
+        with:
+          extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona", "parallel-web", "messaging"]'
+          test-environment: 'true'
+          cache: 'false'
+          cache-python: 'false'
+          cache-node: 'false'
+      - name: Inspect pinned dependency and verify fixture proposal
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/aw043-fixture-evidence"
+          mkdir -p "$evidence"
+          test "$(git rev-parse HEAD)" = "c572afa804c8109473feaed8bd039b06be131159"
+          test "$(git rev-parse HEAD^)" = "ae3598c7cdf3a2e4a6f60d0d869602813dded97a"
+          git diff --name-only HEAD^ HEAD > "$evidence/changed-files.txt"
+          "$HERMES_PYTHON" -c 'import inspect,telegram; from telegram.ext import Application; print(telegram.__version__); print(inspect.getsource(Application.stop)); print(inspect.getsource(Application._Application__create_task))' > "$evidence/ptb-installed-interface.txt"
+          "$HERMES_PYTHON" -c 'import asyncio,inspect; print(inspect.getsource(asyncio.gather))' > "$evidence/asyncio-gather.txt"
+          /bin/bash scripts/run_tests.sh -j 2 --file-retries 0 --file-timeout 600 \
+            tests/plugins/test_telegram_update_admission.py \
+            --tb=short 2>&1 | tee "$evidence/tests.log"
+          "$HERMES_PYTHON" scripts/check --base ae3598c7cdf3a2e4a6f60d0d869602813dded97a 2>&1 | tee "$evidence/lint-health.log"
+          "$HERMES_PYTHON" -m py_compile tests/plugins/test_telegram_update_admission.py
+          git diff --check HEAD^ HEAD
+          test -z "$(git diff --name-only HEAD)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          sha256sum tests/plugins/test_telegram_update_admission.py > "$evidence/final-hashes.txt"
+          git status --short --branch > "$evidence/final-status.txt"
+          printf '%s\n' 'PASS: one affected test file, lint/health, compilation, whitespace and cleanliness; broader combined candidate unrun' > "$evidence/result.txt"
+      - name: Preserve first-attempt checks even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-event-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aw043-fixture-evidence
+          if-no-files-found: warn
+          retention-days: 30
