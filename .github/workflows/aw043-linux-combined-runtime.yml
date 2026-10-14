@@ -1,12 +1,13 @@
-name: AW-043 combined Linux runtime with verified setup
+name: AW-043 combined Linux runtime with source admission
 
 on:
   push:
-    branches: [review/aw043-combined-runtime-ci-setupfix]
+    branches: [review/aw043-combined-runtime-ci-historyfix]
     paths:
       - .github/workflows/aw043-linux-combined-runtime.yml
       - scripts/ci/aw043_linux_combined_runtime.py
       - .github/actions/aw043-review-ripgrep/action.yml
+      - scripts/ci/aw043_verify_runtime_source.py
 
 permissions:
   contents: read
@@ -32,6 +33,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Checkout exact reviewed candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: 2581a6325da28288b471d8c83b0d9e35f173ab12
+          path: candidate
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Verify reviewed source ancestry scope and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_verify_runtime_source.py" "$GITHUB_WORKSPACE/candidate" 2>&1 | tee "$RUNNER_TEMP/aw043-runtime-evidence/source-admission.log"
       - name: Verify shared ripgrep provisioning
         uses: ./.github/actions/aw043-review-ripgrep
       - name: Record final job status
@@ -88,10 +101,14 @@ jobs:
         with:
           ref: 2581a6325da28288b471d8c83b0d9e35f173ab12
           path: candidate
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Provision shared upstream pinned ripgrep
         uses: ./.github/actions/aw043-review-ripgrep
+      - name: Admit source before native environment preparation
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_verify_runtime_source.py" "$GITHUB_WORKSPACE/candidate" 2>&1 | tee "$RUNNER_TEMP/aw043-runtime-evidence/source-admission.log"
       - name: Prepare native pinned isolated test environment
         uses: ./candidate/.github/actions/setup-pm
         with:
