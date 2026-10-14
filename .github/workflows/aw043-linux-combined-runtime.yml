@@ -1,11 +1,12 @@
-name: AW-043 combined Linux default runtime
+name: AW-043 combined Linux runtime with verified setup
 
 on:
   push:
-    branches: [review/aw043-combined-runtime-ci]
+    branches: [review/aw043-combined-runtime-ci-setupfix]
     paths:
       - .github/workflows/aw043-linux-combined-runtime.yml
       - scripts/ci/aw043_linux_combined_runtime.py
+      - .github/actions/aw043-review-ripgrep/action.yml
 
 permissions:
   contents: read
@@ -15,7 +16,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  setup-check:
+    if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
+    name: Verify pinned ripgrep setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Initialize early setup evidence
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          printf '%s\n' '{"phase":"setup-started","tests":"unrun"}' > "$RUNNER_TEMP/aw043-runtime-evidence/setup-start.json"
+      - name: Checkout review infrastructure
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify shared ripgrep provisioning
+        uses: ./.github/actions/aw043-review-ripgrep
+      - name: Record final job status
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          REVIEW_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"aw043-runtime-evidence"/"job-status.json"; p.write_text(json.dumps({"status":os.environ["REVIEW_JOB_STATUS"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"]}))'
+      - name: Preserve setup evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aw043-setup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aw043-runtime-evidence
+          if-no-files-found: error
+          retention-days: 30
+
   runtime:
+    needs: setup-check
     if: github.repository == 'SidrionLabs/hermes-agent-aw-review'
     name: Native default runtime (${{ matrix.slice }}/8)
     runs-on: ubuntu-24.04
@@ -36,6 +73,11 @@ jobs:
       OPENROUTER_API_KEY: ''
       NOUS_API_KEY: ''
     steps:
+      - name: Initialize early setup evidence
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          printf '%s\n' '{"phase":"setup-started","tests":"unrun"}' > "$RUNNER_TEMP/aw043-runtime-evidence/setup-start.json"
       - name: Checkout review infrastructure
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -48,17 +90,8 @@ jobs:
           path: candidate
           fetch-depth: 2
           persist-credentials: false
-      - name: Provision upstream pinned ripgrep
-        run: |
-          set -euo pipefail
-          target="$RUNNER_TEMP/aw043-ripgrep"
-          mkdir -p "$target"
-          archive="$target/ripgrep.tar.gz"
-          curl -fsSL --retry 3 --retry-delay 5 -o "$archive" \\
-            https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz
-          echo "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599  $archive" | sha256sum -c -
-          tar -xzf "$archive" -C "$target"
-          echo "$target/ripgrep-15.1.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: Provision shared upstream pinned ripgrep
+        uses: ./.github/actions/aw043-review-ripgrep
       - name: Prepare native pinned isolated test environment
         uses: ./candidate/.github/actions/setup-pm
         with:
@@ -69,11 +102,19 @@ jobs:
           cache-node: 'false'
       - name: Verify one native default runtime slice
         run: python3 "$GITHUB_WORKSPACE/scripts/ci/aw043_linux_combined_runtime.py" "$GITHUB_WORKSPACE/candidate"
+      - name: Record final job status
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          REVIEW_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/aw043-runtime-evidence"
+          python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"aw043-runtime-evidence"/"job-status.json"; p.write_text(json.dumps({"status":os.environ["REVIEW_JOB_STATUS"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"]}))'
       - name: Preserve diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: aw043-runtime-${{ github.run_id }}-${{ github.run_attempt }}-slice-${{ matrix.slice }}
           path: ${{ runner.temp }}/aw043-runtime-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

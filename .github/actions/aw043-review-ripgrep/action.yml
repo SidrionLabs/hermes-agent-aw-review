@@ -1,0 +1,22 @@
+name: Provision AW review ripgrep
+description: Verify upstream CI's pinned ripgrep in isolated runner storage.
+runs:
+  using: composite
+  steps:
+    - name: Download and verify upstream pinned ripgrep
+      shell: bash
+      run: |
+        set -euo pipefail
+        evidence="$RUNNER_TEMP/aw043-runtime-evidence"
+        mkdir -p "$evidence"
+        {
+          target="$RUNNER_TEMP/aw043-ripgrep"
+          mkdir -p "$target"
+          archive="$target/ripgrep.tar.gz"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$archive" 'https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz'
+          echo "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$target"
+          binary_dir="$target/ripgrep-15.1.0-x86_64-unknown-linux-musl"
+          "$binary_dir/rg" --version
+          echo "$binary_dir" >> "$GITHUB_PATH"
+        } 2>&1 | tee "$evidence/ripgrep-setup.log"
